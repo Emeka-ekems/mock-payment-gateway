@@ -1,0 +1,198 @@
+-- Flash setup (BASH)
+pip install Flask Flask-OAuthlib
+
+-- configure security 
+from flask import Flask, request, jsonify, g
+from flask_oauthlib.provider import OAuth2Provider
+import uuid
+
+app = Flask(__name__)
+app.config['DEBUG'] = True
+app.config['SECRET_KEY'] = 'secret'
+oauth = OAuth2Provider(app)
+
+transactions = {}
+clients = {
+    "client_id": {
+        "client_secret": "client_secret",
+        "redirect_uris": [],
+        "default_scopes": ["email"]
+    }
+}
+
+tokens = {}
+
+@oauth.clientgetter
+def load_client(client_id):
+    return clients.get(client_id)
+
+@oauth.grantgetter
+def load_grant(client_id, code):
+    return None
+
+@oauth.grantsetter
+def save_grant(client_id, code, request, *args, **kwargs):
+    return None
+
+@oauth.tokengetter
+def load_token(access_token=None, refresh_token=None):
+    return tokens.get(access_token) if access_token else None
+
+@oauth.tokensetter
+def save_token(token, request, *args, **kwargs):
+    tokens[token['access_token']] = token
+
+-- create endpoints 
+@app.route('/initiate_transaction', methods=['POST'])
+@oauth.require_oauth('email')
+def initiate_transaction():
+    data = request.json
+    transaction_id = str(uuid.uuid4())
+    transaction = {
+        'id': transaction_id,
+        'amount': data['amount'],
+        'currency': data['currency'],
+        'status': 'initiated'
+    }
+    transactions[transaction_id] = transaction
+    return jsonify(transaction), 201
+
+@app.route('/transaction_status/<transaction_id>', methods=['GET'])
+@oauth.require_oauth('email')
+def transaction_status(transaction_id):
+    transaction = transactions.get(transaction_id)
+    if not transaction:
+        return jsonify({'error': 'Transaction not found'}), 404
+    return jsonify(transaction), 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json
+    transaction_id = data['transaction_id']
+    status = data['status']
+    transaction = transactions.get(transaction_id)
+    if transaction:
+        transaction['status'] = status
+        return jsonify({'message': 'Status updated'}), 200
+    return jsonify({'error': 'Transaction not found'}), 404
+
+-- API Documentation 
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Mock Payment Gateway API",
+        "version": "1.0.0",
+        "title": "Payment Gateway"
+    },
+    "host": "localhost:5000",
+    "basePath": "/",
+    "schemes": ["http"],
+    "paths": {
+        "/initiate_transaction": {
+            "post": {
+                "summary": "Initiate a transaction",
+                "description": "Initiate a new transaction",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "description": "Transaction object",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/Transaction"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Transaction created",
+                        "schema": {
+                            "$ref": "#/definitions/Transaction"
+                        }
+                    }
+                }
+            }
+        },
+        "/transaction_status/{transaction_id}": {
+            "get": {
+                "summary": "Get transaction status",
+                "description": "Get the status of a transaction",
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "name": "transaction_id",
+                        "in": "path",
+                        "required": true,
+                        "type": "string"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Transaction status",
+                        "schema": {
+                            "$ref": "#/definitions/Transaction"
+                        }
+                    }
+                }
+            }
+        },
+        "/webhook": {
+            "post": {
+                "summary": "Receive webhook notifications",
+                "description": "Receive transaction status updates",
+                "consumes": ["application/json"],
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "in": "body",
+                        "name": "body",
+                        "description": "Webhook object",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/Webhook"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Status updated"
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "Transaction": {
+            "type": "object",
+            "required": ["amount", "currency"],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "amount": {
+                    "type": "number"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "Webhook": {
+            "type": "object",
+            "required": ["transaction_id", "status"],
+            "properties": {
+                "transaction_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}
